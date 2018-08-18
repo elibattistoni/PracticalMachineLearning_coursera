@@ -1,0 +1,136 @@
+---
+title: "Practical Machine Learning"
+subtitle: "Final Project"
+author: "Elisa Battistoni"
+date: "8/18/2018"
+output: html_document
+---
+
+This course project is based on the prediction of the manner in which 6 participants performed weight lifting exercise. More info on the dataset can be found on the website of the [Project Human Activity Recognition](http://groupware.les.inf.puc-rio.br/har). Specifically, they were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions (this information is represented by the "class" variable in the dataset):
+
++ CLASS A: exactly according to the specification
+
++ CLASS B: throwing the elbows to the front
+
++ CLASS C: lifting the dumbbell only halfway
+
++ CLASS D: lowering the dumbbell only halfway
+
++ CLASS E: throwing the hips to the front
+
+The goal of the present project is to predict the manner in which they did the exercise. Data for building the model is "pml-training.csv", data for validating the model is "pml-testing.csv". The validation set will be used to apply the machine learning algorithm to the 20 test cases available in such dataset, and submit the predictions to the Course Porject Prediction Quiz.
+
+#### 1. Prepare session and data
+To note: inspection of the data with `head()`, `dim()`, and `str()` was performed, but nore reported here.
+
+Load libraries and set seed.
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+set.seed(5872)
+
+library(caret); library(dplyr); library(ggplot2); library(GGally); library(reshape2); 
+library(rpart); library(rpart.plot); library(randomForest); library(rattle);
+```
+
+Download and read data.
+```{r, echo = TRUE}
+# this dataset ("pml-training.csv") will be used for building and testing the model
+download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+              destfile = paste(getwd(),"data_for_model.csv", sep = "/"))
+dataModelRaw = read.csv("data_for_model.csv", na.strings = c("","NA","#DIV/0!"))
+
+# this dataset ("pml-testing.csv") will be used as validation set 
+# (needed for predicting classes in the Quiz part of the project)
+download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+              destfile = paste(getwd(),"data_for_validation.csv", sep = "/"))
+dataValidationRaw = read.csv("data_for_validation.csv", na.strings = c("","NA","#DIV/0!"))
+```
+
+
+#### 2. Clean data
+It is important to apply the same transformations (preprocessing steps) to the dataset used for building the model and the validation dataset.
+
+Remove columns with NAs.
+```{r, echo = TRUE}
+dataModel_noNA = dataModelRaw[, colSums(is.na(dataModelRaw)) == 0]
+dataValidation_noNA = dataValidationRaw[, colSums(is.na(dataValidationRaw)) == 0]
+```
+
+By running `str(dataModel_noNA)`, notice that the first 7 columns do not have  any useful information, therefore remove them.
+```{r, echo = TRUE}
+dataModel_noNA = dataModel_noNA[, -(1:7)]
+dataValidation_noNA = dataValidation_noNA[, -(1:7)]
+```
+Now the predictors (or features, found in the columns) are down to 53.
+
+Quick check of the column names. The columns of the dataset used for building the model are the same as those in the validation set. The only difference lies in the last column, which is "class" in dataModel_noNA and "problem_id" in dataValidation_noNA (but this is perfectly normal, it is not due to the preprocessing steps performed above).
+```{r, echo = TRUE}
+colnames(dataModel_noNA) == colnames(dataValidation_noNA)
+```
+
+Remove near zero variance (NZV) variables, because they have little prediction value.
+```{r, echo = TRUE}
+dataModel_NZV = nearZeroVar(dataModel_noNA, saveMetrics = TRUE)
+dataModel_clean = dataModel_noNA[, dataModel_NZV$nzv == FALSE]
+dataValidation_clean = dataValidation_noNA[, dataModel_NZV$nzv == FALSE]
+```
+
+Check for multicollinearity, and remove highly correlated (>0.90) variables. This step is performed because: 1) simpler models are preferred, and the fewer the features (variables), the simpler; 2) might affect especially random forests (and regression, but this is not the current situation).
+Note: the figure can be found in the repo as "Figure1.png".
+```{r, echo = TRUE, fig.show = 'hide'}
+correlationMatrix <- cor(dataModel_clean[sapply(dataModel_clean, is.numeric)])
+ggcorr(correlationMatrix, name = "rho", label = FALSE, 
+       low = "steelblue", mid = "white", high = "darkred",
+       geom = "circle", min_size = 0, max_size = 6,
+       size = 3, hjust = 1.1, angle = -90)
+# Some variables have high correlation, so remove them
+cor_idx = findCorrelation(correlationMatrix, cutoff = 0.90)
+dataModel_clean = dataModel_clean[, -cor_idx]
+dataValidation_clean = dataValidation_clean[, -cor_idx]
+```
+
+#### 3. Partition data
+Now that the data is clean, set aside the validation dataset.
+Subset dataModelRaw for cross-validation into training (70%) and test set (30%).
+```{r, echo = TRUE}
+inTrain = createDataPartition(y = dataModel_clean$classe, p = 0.7, list = FALSE)
+TrainingSet = dataModel_clean[inTrain,]
+TestSet = dataModel_clean[-inTrain,]
+```
+
+#### 4. Build models and test
+Models taken into consideration here: 1) Decision Trees, 2) Random Forests. Try to build models with these algorithms, then based on their accuracy (out of sample error) decide which is the best one (and this model will be used on the validation set for the Quiz assignment). I expect the Random Forest algorithm to perform better, since it is one of the most accurate alongside the boosting algorithm.
+
+**Model 1: Decision Trees**. Note: the figure can be found in the repo as "Figure2.png".
+```{r echo=TRUE, warning=FALSE, fig.show = 'hide'}
+decisionTreeModel = rpart(classe ~., method = "class", data = TrainingSet)
+fancyRpartPlot(decisionTreeModel)
+# test accuracy on cross validation set (out of sample error)
+predictionDTmod = predict(decisionTreeModel, TestSet, type = "class")
+confMatDTmod = confusionMatrix(predictionDTmod, TestSet$classe)
+```
+
+**Model 2: Random Forests**
+```{r, echo = TRUE}
+randomForestModel = randomForest(classe ~ ., data = TrainingSet)
+# test accuracy on cross validation set (out of sample error)
+predictionRFmod = predict(randomForestModel, TestSet, type = "class")
+confMatRFmod = confusionMatrix(predictionRFmod, TestSet$classe)
+```
+
+Comparison of the two models.
+```{r, echo = TRUE}
+model_comparison = data.frame(MODEL = c("DecisionTree", "RandomForest"),
+                              ACCURACY = c(confMatDTmod$overall[1]*100,
+                                           confMatRFmod$overall[1]*100),
+                              OUT_of_SAMPLE_ERROR = c((1-confMatDTmod$overall[1])*100,
+                                                      (1-confMatRFmod$overall[1])*100))
+model_comparison
+```
+As expected, the Random Forests is the best performing one, since it has higher accuracy (and thus, lower out of sample error).
+
+
+Finally, use the best model (random forest) to predict the classes on the validation dataset.
+```{r, echo = TRUE}
+predictValidation = predict(randomForestModel, dataValidation_clean)
+predictValidation
+```
